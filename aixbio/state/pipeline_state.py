@@ -36,7 +36,10 @@ class ChainProcessingResult(TypedDict):
     remediation_rounds: int
     remediation_history: tuple[RemediationAction, ...]
     # Status distinguishes pass, fail, and max-retries-exceeded outcomes
-    status: Literal["passed", "failed", "max_retries_exceeded"]
+    status: Literal[
+        "passed", "failed", "max_retries_exceeded",
+        "host_incompatible", "escalation_failed",
+    ]
 
 
 class PipelineState(TypedDict):
@@ -50,6 +53,7 @@ class PipelineState(TypedDict):
     cloning_sites: tuple[str, ...]
     run_structural_validation: bool
     max_remediation_attempts: int
+    enable_escalation: bool
 
     # Step 1 output
     protein_record: ProteinRecord | None

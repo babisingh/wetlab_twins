@@ -5,6 +5,13 @@ from aixbio.models.validation import CheckResult, ChainValidation, ValidationRep
 from aixbio.models.structure import StructureResult, StructureReport
 from aixbio.models.remediation import RemediationAction, PlannedFix, RemediationPlan
 from aixbio.models.audit import AgentDecision
+from aixbio.models.escalation import (
+    EscalationApplyPlan,
+    EscalationChangeStrategy,
+    EscalationDecision,
+    EscalationGiveUp,
+    EscalationIncompatible,
+)
 
 __all__ = [
     "Chain", "ProteinRecord",
@@ -14,4 +21,6 @@ __all__ = [
     "StructureResult", "StructureReport",
     "RemediationAction", "PlannedFix", "RemediationPlan",
     "AgentDecision",
+    "EscalationApplyPlan", "EscalationIncompatible",
+    "EscalationChangeStrategy", "EscalationGiveUp", "EscalationDecision",
 ]

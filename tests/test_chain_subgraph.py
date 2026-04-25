@@ -32,6 +32,9 @@ def _make_input_state():
         "remediation_plan": None,
         "chain_results": [],
         "remediation_history": [],
+        "enable_escalation": False,
+        "escalation_used": False,
+        "escalation_decision": None,
         "decision_log": [],
         "warnings": [],
     }

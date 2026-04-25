@@ -28,6 +28,7 @@ def main():
     parser.add_argument("--structural", action="store_true", help="Run structural validation (Step 6)")
     parser.add_argument("--max-retries", type=int, default=DEFAULT_MAX_REMEDIATION_ATTEMPTS)
     parser.add_argument("--auto-approve", action="store_true", help="Skip human checkpoints")
+    parser.add_argument("--escalation", action="store_true", help="Enable LLM escalation agent on remediation exhaustion")
     parser.add_argument("--output-dir", default="output", help="Directory for output files")
     args = parser.parse_args()
 
@@ -43,6 +44,7 @@ def main():
         "vector": DEFAULT_VECTOR,
         "cloning_sites": DEFAULT_CLONING_SITES,
         "run_structural_validation": args.structural,
+        "enable_escalation": args.escalation,
         "protein_record": None,
         "chain_extraction_reasoning": "",
         "chain_results": [],

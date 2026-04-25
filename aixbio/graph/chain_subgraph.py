@@ -4,12 +4,33 @@ from langgraph.graph import END, START, StateGraph
 
 from aixbio.nodes.cassette_assembly import cassette_assembly
 from aixbio.nodes.codon_optimization import codon_optimization
-from aixbio.nodes.merge_results import halt_pipeline, package_result, package_result_failed
+from aixbio.nodes.escalation_agent import escalation_agent
+from aixbio.nodes.merge_results import (
+    halt_pipeline,
+    package_result,
+    package_result_escalated,
+    package_result_failed,
+)
 from aixbio.nodes.plasmid_assembly import plasmid_assembly
 from aixbio.nodes.remediation_agent import apply_fixes, remediation_agent
-from aixbio.nodes.routers import revalidation_router, validation_router
+from aixbio.nodes.routers import escalation_router, revalidation_router, validation_router
 from aixbio.nodes.sequence_validation import sequence_validation
 from aixbio.state.chain_state import ChainSubgraphState
+
+_VALIDATION_MAP = {
+    "package_result": "package_result",
+    "halt_pipeline": "halt_pipeline",
+    "package_result_failed": "package_result_failed",
+    "remediation_agent": "remediation_agent",
+    "escalation_agent": "escalation_agent",
+}
+
+_ESCALATION_MAP = {
+    "apply_fixes": "apply_fixes",
+    "codon_optimization": "codon_optimization",
+    "package_result_escalated": "package_result_escalated",
+    "halt_pipeline": "halt_pipeline",
+}
 
 
 def build_chain_subgraph() -> StateGraph:
@@ -30,6 +51,10 @@ def build_chain_subgraph() -> StateGraph:
     g.add_node("reassemble_plasmid", plasmid_assembly)
     g.add_node("revalidate", sequence_validation)
 
+    # Escalation
+    g.add_node("escalation_agent", escalation_agent)
+    g.add_node("package_result_escalated", package_result_escalated)
+
     # Terminal nodes
     g.add_node("package_result", package_result)
     g.add_node("package_result_failed", package_result_failed)
@@ -45,12 +70,7 @@ def build_chain_subgraph() -> StateGraph:
     g.add_conditional_edges(
         "sequence_validation",
         validation_router,
-        {
-            "package_result": "package_result",
-            "halt_pipeline": "halt_pipeline",
-            "package_result_failed": "package_result_failed",
-            "remediation_agent": "remediation_agent",
-        },
+        _VALIDATION_MAP,
     )
 
     # Remediation cycle
@@ -62,17 +82,20 @@ def build_chain_subgraph() -> StateGraph:
     g.add_conditional_edges(
         "revalidate",
         revalidation_router,
-        {
-            "package_result": "package_result",
-            "halt_pipeline": "halt_pipeline",
-            "package_result_failed": "package_result_failed",
-            "remediation_agent": "remediation_agent",
-        },
+        _VALIDATION_MAP,
+    )
+
+    # Escalation routing
+    g.add_conditional_edges(
+        "escalation_agent",
+        escalation_router,
+        _ESCALATION_MAP,
     )
 
     # Terminal edges
     g.add_edge("package_result", END)
     g.add_edge("package_result_failed", END)
+    g.add_edge("package_result_escalated", END)
     g.add_edge("halt_pipeline", END)
 
     return g

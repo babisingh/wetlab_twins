@@ -86,6 +86,10 @@ _ALLOWED_MSGPACK_MODULES = [
     ("aixbio.models.remediation", "RemediationPlan"),
     ("aixbio.models.structure", "StructureResult"),
     ("aixbio.models.structure", "StructureReport"),
+    ("aixbio.models.escalation", "EscalationApplyPlan"),
+    ("aixbio.models.escalation", "EscalationIncompatible"),
+    ("aixbio.models.escalation", "EscalationChangeStrategy"),
+    ("aixbio.models.escalation", "EscalationGiveUp"),
 ]
 
 

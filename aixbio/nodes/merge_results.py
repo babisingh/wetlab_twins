@@ -41,6 +41,16 @@ def halt_pipeline(state: ChainSubgraphState) -> dict:
     return result
 
 
+def package_result_escalated(state: ChainSubgraphState) -> dict:
+    result = package_result(state)
+    decision = state.get("escalation_decision")
+    if decision is not None and decision.kind == "incompatible":
+        result["chain_results"][0]["status"] = "host_incompatible"
+    else:
+        result["chain_results"][0]["status"] = "escalation_failed"
+    return result
+
+
 def merge_all_chain_results(state: PipelineState) -> dict:
     chain_results = state.get("chain_results", [])
     chain_validations = []
