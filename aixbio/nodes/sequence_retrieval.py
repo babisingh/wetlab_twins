@@ -4,10 +4,10 @@ import asyncio
 import json
 from datetime import datetime, timezone
 
-from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_openai import ChatOpenAI
 
-from aixbio.config import LLM_MODEL
+from aixbio.config import LLM_MODEL, OPENROUTER_API_KEY, OPENROUTER_BASE_URL
 from aixbio.models.audit import AgentDecision
 from aixbio.models.protein import Chain, ProteinRecord
 from aixbio.prompts.sequence_retrieval import SEQUENCE_RETRIEVAL_SYSTEM
@@ -24,7 +24,12 @@ def sequence_retrieval_agent(state: PipelineState) -> dict:
 
     features_summary = json.dumps(entry.get("features", []), indent=2, default=str)
 
-    llm = ChatAnthropic(model=LLM_MODEL, temperature=0)
+    llm = ChatOpenAI(
+        model=LLM_MODEL,
+        temperature=0,
+        openai_api_key=OPENROUTER_API_KEY,
+        openai_api_base=OPENROUTER_BASE_URL,
+    )
     response = llm.invoke([
         SystemMessage(content=SEQUENCE_RETRIEVAL_SYSTEM),
         HumanMessage(content=(

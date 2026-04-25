@@ -3,10 +3,10 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
-from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_openai import ChatOpenAI
 
-from aixbio.config import LLM_MODEL
+from aixbio.config import LLM_MODEL, OPENROUTER_API_KEY, OPENROUTER_BASE_URL
 from aixbio.models.audit import AgentDecision
 from aixbio.models.remediation import PlannedFix, RemediationAction, RemediationPlan
 from aixbio.prompts.remediation import REMEDIATION_SYSTEM
@@ -35,7 +35,12 @@ def remediation_agent(state: ChainSubgraphState) -> dict:
             for h in history
         ], indent=2, default=str)
 
-    llm = ChatAnthropic(model=LLM_MODEL, temperature=0)
+    llm = ChatOpenAI(
+        model=LLM_MODEL,
+        temperature=0,
+        openai_api_key=OPENROUTER_API_KEY,
+        openai_api_base=OPENROUTER_BASE_URL,
+    )
     response = llm.invoke([
         SystemMessage(content=REMEDIATION_SYSTEM),
         HumanMessage(content=(

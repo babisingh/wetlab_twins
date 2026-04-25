@@ -4,6 +4,10 @@ import argparse
 import json
 import sys
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from aixbio.config import (
     DEFAULT_AVOID_SITES,
     DEFAULT_CLONING_SITES,
