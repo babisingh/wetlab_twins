@@ -151,6 +151,54 @@ Every decision is recorded in the shared state:
 - `remediation_history` — every `RemediationAction` applied (before/after codons, positions, reasoning)
 - `warnings` — non-fatal issues surfaced during processing
 
+## Biosafety screening
+
+The pipeline refuses to process sequences that match any entry on the
+CDC/USDA Select Agent Program toxin list. Screening runs in **three layers**,
+in order:
+
+| Layer | When | What is checked |
+|-------|------|----------------|
+| 1 — UniProt ID blocklist | Pre-flight (before any network call) | Exact match against a curated set of 30+ canonical accessions for Tier-1 toxins |
+| 2 — Protein name keywords | After UniProt retrieval | Case-insensitive substring match on the protein name / description |
+| 3 — AA signature scan | After UniProt retrieval | Short diagnostic peptides from published immunoassay literature embedded in the chain sequence |
+
+If any layer matches, the pipeline **halts immediately**, prints a block
+notice, and writes **no output artifacts**:
+
+```
+============================================================
+BIOSAFETY BLOCK — PIPELINE HALTED
+============================================================
+Compound : P02879
+Agent    : Ricin (Ricinus communis)
+Reason   : UniProt accession P02879 is a CDC/USDA Select Agent toxin
+           (Ricin (Ricinus communis)). Synthesis of this sequence is
+           prohibited without an approved Select Agent registration.
+
+This sequence is a CDC/USDA Select Agent toxin. Synthesis is
+prohibited without an approved Select Agent registration.
+See: https://www.selectagents.gov/
+```
+
+Blocked agents include (non-exhaustive): ricin, abrin, all botulinum toxin
+serotypes (A–G), tetanus toxin, anthrax toxin components, diphtheria toxin,
+Shiga toxins, cholera toxin, staphylococcal enterotoxins A–E, *C. perfringens*
+epsilon toxin, pertussis toxin, Ebola/Marburg glycoproteins, and *Y. pestis*
+F1 antigen.
+
+> **For production deployments** supplement this heuristic screen with a
+> BLAST search against the NCBI Select Agent sequence database
+> (https://www.ncbi.nlm.nih.gov/selectagent/). The heuristic covers all
+> canonical accessions but cannot catch novel variants or fragments that fall
+> below keyword/signature detection thresholds.
+
+**Files involved:**
+- `aixbio/tools/biosafety.py` — blocklists + `screen_compound_id()` / `screen_protein()`
+- `aixbio/models/biosafety.py` — `BiosafetyResult` dataclass
+- `aixbio/nodes/biosafety_screen.py` — LangGraph node (runs after `sequence_retrieval`, before `host_selection`)
+- `tests/test_biosafety.py` — 19 unit + integration tests
+
 ## Configuration
 
 Defaults are set in `config.py` and all overridable via environment variables:

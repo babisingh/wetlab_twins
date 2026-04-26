@@ -10,9 +10,10 @@ from aixbio.nodes.human_checkpoints import (
     human_checkpoint_plasmid,
 )
 from aixbio.nodes.merge_results import merge_all_chain_results
+from aixbio.nodes.biosafety_screen import biosafety_screen
 from aixbio.nodes.host_selection import host_selection
 from aixbio.nodes.protocol_generation import protocol_generation
-from aixbio.nodes.routers import fan_out_to_chains, post_structural_router, structural_router
+from aixbio.nodes.routers import biosafety_router, fan_out_to_chains, post_structural_router, structural_router
 from aixbio.nodes.sequence_retrieval import sequence_retrieval_agent
 from aixbio.nodes.structural_validation import structural_validation
 from aixbio.state.pipeline_state import PipelineState
@@ -24,7 +25,10 @@ def build_main_graph() -> StateGraph:
     # Step 1: Sequence Retrieval (deterministic)
     g.add_node("sequence_retrieval", sequence_retrieval_agent)
 
-    # Step 1b: Host recommendation (deterministic, runs on extracted chains)
+    # Step 1b: Biosafety screen (runs immediately after retrieval)
+    g.add_node("biosafety_screen", biosafety_screen)
+
+    # Step 1c: Host recommendation (deterministic, runs on extracted chains)
     g.add_node("host_selection", host_selection)
 
     # Human checkpoint: review chain extraction + host recommendation
@@ -47,7 +51,13 @@ def build_main_graph() -> StateGraph:
 
     # Edges
     g.add_edge(START, "sequence_retrieval")
-    g.add_edge("sequence_retrieval", "host_selection")
+    g.add_edge("sequence_retrieval", "biosafety_screen")
+    # Halt immediately if blocked; otherwise continue to host selection
+    g.add_conditional_edges(
+        "biosafety_screen",
+        biosafety_router,
+        {"host_selection": "host_selection", "__end__": END},
+    )
     g.add_edge("host_selection", "human_checkpoint_chains")
 
     # Fan-out: human_checkpoint_chains -> N x chain_processing
@@ -88,6 +98,7 @@ def build_main_graph() -> StateGraph:
 
 
 _ALLOWED_MSGPACK_MODULES = [
+    ("aixbio.models.biosafety", "BiosafetyResult"),
     ("aixbio.models.host", "HostFeatures"),
     ("aixbio.models.host", "HostRecommendation"),
     ("aixbio.models.solubility", "SolubilityResult"),

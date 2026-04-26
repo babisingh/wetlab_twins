@@ -18,6 +18,7 @@ from aixbio.config import (
     DEFAULT_VECTOR,
 )
 from aixbio.graph.main_graph import compile_pipeline
+from aixbio.tools.biosafety import screen_compound_id
 from aixbio.tools.restriction_sites import get_native_enzymes
 
 
@@ -32,6 +33,22 @@ def main():
     parser.add_argument("--protocol", action="store_true", help="Generate literature-backed wet-lab SOP after pipeline completes")
     parser.add_argument("--output-dir", default="output", help="Directory for output files")
     args = parser.parse_args()
+
+    # Pre-flight biosafety check (Layer 1: UniProt ID only, no network call)
+    preflight = screen_compound_id(args.compound_id)
+    if not preflight.safe:
+        print(f"\n{'=' * 60}")
+        print("BIOSAFETY BLOCK — PIPELINE HALTED")
+        print(f"{'=' * 60}")
+        print(f"Compound : {args.compound_id}")
+        print(f"Agent    : {preflight.matched_agent}")
+        print(f"Reason   : {preflight.reason}")
+        print(
+            "\nThis sequence is a CDC/USDA Select Agent toxin. Synthesis is "
+            "prohibited without an approved Select Agent registration.\n"
+            "See: https://www.selectagents.gov/"
+        )
+        return 1
 
     app = compile_pipeline()
     config = {"configurable": {"thread_id": f"pipeline-{args.compound_id}"}}
@@ -48,6 +65,7 @@ def main():
         "run_protocol_generation": args.protocol,
         "enable_escalation": args.escalation,
         "protein_record": None,
+        "biosafety_result": None,
         "host_recommendation": None,
         "protocol": None,
         "chain_extraction_reasoning": "",
@@ -112,6 +130,18 @@ def _print_results(result: dict):
 
     status = result.get("pipeline_status", "unknown")
     print(f"Status: {status}")
+
+    if status == "biosafety_rejected":
+        bio = result.get("biosafety_result")
+        print(f"\n{'=' * 60}")
+        print("BIOSAFETY BLOCK — PIPELINE HALTED")
+        print(f"{'=' * 60}")
+        if bio:
+            print(f"  Agent : {bio.matched_agent}")
+            print(f"  Match : {bio.match_type}")
+            print(f"  Reason: {bio.reason}")
+        print("\nNo output artifacts have been written.")
+        return
 
     rec = result.get("host_recommendation")
     if rec:
@@ -190,6 +220,9 @@ def _print_results(result: dict):
 
 
 def _write_artifacts(result: dict, compound_id: str, output_dir: str):
+    if result.get("pipeline_status") == "biosafety_rejected":
+        return  # never write artifacts for blocked sequences
+
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
 

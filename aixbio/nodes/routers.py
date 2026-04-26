@@ -84,6 +84,12 @@ def fan_out_to_chains(state: PipelineState) -> list[Send]:
     return sends
 
 
+def biosafety_router(state: PipelineState) -> str:
+    if state.get("pipeline_status") == "biosafety_rejected":
+        return "__end__"
+    return "host_selection"
+
+
 def structural_router(
     state: PipelineState,
 ) -> Literal["structural_validation", "protocol_generation", "__end__"]:

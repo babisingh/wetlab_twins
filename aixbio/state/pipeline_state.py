@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Annotated, Literal, TypedDict
 
 from aixbio.models.audit import AgentDecision
+from aixbio.models.biosafety import BiosafetyResult
 from aixbio.models.host import HostRecommendation
 from aixbio.models.protein import ProteinRecord
 from aixbio.models.remediation import RemediationAction
@@ -65,6 +66,9 @@ class PipelineState(TypedDict):
     protein_record: ProteinRecord | None
     chain_extraction_reasoning: str
 
+    # Biosafety screen (runs after sequence_retrieval, before host selection)
+    biosafety_result: BiosafetyResult | None
+
     # Host recommendation (runs after sequence_retrieval, before fan-out)
     host_recommendation: HostRecommendation | None
 
@@ -83,7 +87,8 @@ class PipelineState(TypedDict):
 
     # Control flow
     pipeline_status: Literal[
-        "running", "completed", "failed", "halted", "awaiting_human"
+        "running", "completed", "failed", "halted", "awaiting_human",
+        "biosafety_rejected",
     ]
 
     # Auditability
