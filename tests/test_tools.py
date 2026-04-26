@@ -155,3 +155,96 @@ def test_solubility_node_returns_warnings_for_disulfide():
     # Node must surface warnings for disulfide risk
     warnings = result.get("warnings", [])
     assert any("disulfide" in w.lower() for w in warnings)
+
+
+# ---------------------------------------------------------------------------
+# Host selector
+# ---------------------------------------------------------------------------
+
+def _make_chain(seq):
+    from aixbio.models.protein import Chain
+    return Chain(id="test", aa_sequence=seq, length=len(seq))
+
+
+def test_host_selector_ecoli_default():
+    from aixbio.tools.host_selector import recommend_host
+    # Simple soluble protein — no special features
+    chains = [_make_chain("MAAAKKKDDDEEELLLL")]
+    rec = recommend_host(chains, "TestProtein")
+    assert rec.primary_host == "Escherichia coli"
+    assert rec.confidence == "high"
+    assert rec.features.n_glycosylation_sites == 0
+
+
+def test_host_selector_glycosylated_goes_cho():
+    from aixbio.tools.host_selector import recommend_host
+    # N-X-S/T sequon present (NAS)
+    chains = [_make_chain("MAAANASKKK")]
+    rec = recommend_host(chains, "GlycoProtein")
+    assert rec.primary_host == "CHO"
+    assert rec.confidence == "high"
+    assert rec.features.n_glycosylation_sites >= 1
+
+
+def test_host_selector_insulin_ecoli_refolding():
+    from aixbio.tools.host_selector import recommend_host
+    from aixbio.models.protein import Chain
+    # Insulin A + B: 6 Cys total, 51 aa, no glycosylation
+    chain_a = Chain(id="A", aa_sequence="GIVEQCCTSICSLYQLENYCN", length=21)
+    chain_b = Chain(id="B", aa_sequence="FVNQHLCGSHLVEALYLVCGERGFFYTPKT", length=30)
+    rec = recommend_host([chain_a, chain_b], "Insulin")
+    assert rec.primary_host == "Escherichia coli"
+    assert rec.features.total_cysteine_count == 6
+    assert rec.features.n_glycosylation_sites == 0
+    # Must mention refolding in caveats or reasoning
+    full_text = rec.reasoning + " ".join(rec.caveats)
+    assert "refolding" in full_text.lower()
+
+
+def test_host_selector_large_protein_cho():
+    from aixbio.tools.host_selector import recommend_host
+    # > 500 aa, no glyco, no Cys
+    chains = [_make_chain("MAAAKKKDDD" * 55)]  # 550 aa
+    rec = recommend_host(chains, "BigProtein")
+    assert rec.primary_host == "CHO"
+
+
+def test_host_selector_no_nglycosylation_sequon():
+    from aixbio.tools.host_selector import recommend_host
+    # NPS is NOT a sequon (P blocks it)
+    chains = [_make_chain("MAAANPSKKK")]
+    rec = recommend_host(chains, "NPS")
+    assert rec.features.n_glycosylation_sites == 0
+
+
+# ---------------------------------------------------------------------------
+# LC-MS/MS prediction
+# ---------------------------------------------------------------------------
+
+def test_ms_insulin_b_peptides():
+    from aixbio.tools.ms_prediction import predict_ms_peptides
+    peptides = predict_ms_peptides("Insulin_B", "FVNQHLCGSHLVEALYLVCGERGFFYTPKT")
+    assert len(peptides) >= 2
+    names = [p["peptide"] for p in peptides]
+    # Trypsin cuts after R at position 22 and K at position 29
+    assert any("FVNQHLCGSHLVEALYLVCGER" in n for n in names)
+    assert any("GFFYTPK" in n for n in names)
+
+
+def test_ms_peptide_mass_positive():
+    from aixbio.tools.ms_prediction import predict_ms_peptides
+    rows = predict_ms_peptides("test", "MAAAKKKDDD")
+    for r in rows:
+        assert r["mono_mass"] > 0
+        assert r["mz_2"] > 0
+        assert r["mz_3"] > 0
+        assert r["start"] >= 1
+        assert r["end"] >= r["start"]
+
+
+def test_ms_format_tsv():
+    from aixbio.tools.ms_prediction import format_tsv, predict_ms_peptides
+    rows = predict_ms_peptides("Insulin_B", "FVNQHLCGSHLVEALYLVCGERGFFYTPKT")
+    tsv = format_tsv(rows)
+    assert tsv.startswith("chain_id\tpeptide\tstart\tend\tlength\tmono_mass\tmz_2+\tmz_3+")
+    assert "Insulin_B" in tsv

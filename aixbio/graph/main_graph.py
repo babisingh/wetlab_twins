@@ -10,6 +10,7 @@ from aixbio.nodes.human_checkpoints import (
     human_checkpoint_plasmid,
 )
 from aixbio.nodes.merge_results import merge_all_chain_results
+from aixbio.nodes.host_selection import host_selection
 from aixbio.nodes.protocol_generation import protocol_generation
 from aixbio.nodes.routers import fan_out_to_chains, post_structural_router, structural_router
 from aixbio.nodes.sequence_retrieval import sequence_retrieval_agent
@@ -20,10 +21,13 @@ from aixbio.state.pipeline_state import PipelineState
 def build_main_graph() -> StateGraph:
     g = StateGraph(PipelineState)
 
-    # Step 1: Sequence Retrieval (LLM agent)
+    # Step 1: Sequence Retrieval (deterministic)
     g.add_node("sequence_retrieval", sequence_retrieval_agent)
 
-    # Human checkpoint: review chain extraction
+    # Step 1b: Host recommendation (deterministic, runs on extracted chains)
+    g.add_node("host_selection", host_selection)
+
+    # Human checkpoint: review chain extraction + host recommendation
     g.add_node("human_checkpoint_chains", human_checkpoint_chains)
 
     # Per-chain subgraph (fan-out target)
@@ -43,7 +47,8 @@ def build_main_graph() -> StateGraph:
 
     # Edges
     g.add_edge(START, "sequence_retrieval")
-    g.add_edge("sequence_retrieval", "human_checkpoint_chains")
+    g.add_edge("sequence_retrieval", "host_selection")
+    g.add_edge("host_selection", "human_checkpoint_chains")
 
     # Fan-out: human_checkpoint_chains -> N x chain_processing
     g.add_conditional_edges(
@@ -83,6 +88,8 @@ def build_main_graph() -> StateGraph:
 
 
 _ALLOWED_MSGPACK_MODULES = [
+    ("aixbio.models.host", "HostFeatures"),
+    ("aixbio.models.host", "HostRecommendation"),
     ("aixbio.models.solubility", "SolubilityResult"),
     ("aixbio.models.protein", "Chain"),
     ("aixbio.models.protein", "ProteinRecord"),
