@@ -48,6 +48,7 @@ def main():
         "run_protocol_generation": args.protocol,
         "enable_escalation": args.escalation,
         "protein_record": None,
+        "host_recommendation": None,
         "protocol": None,
         "chain_extraction_reasoning": "",
         "chain_results": [],
@@ -111,6 +112,15 @@ def _print_results(result: dict):
 
     status = result.get("pipeline_status", "unknown")
     print(f"Status: {status}")
+
+    rec = result.get("host_recommendation")
+    if rec:
+        print(f"\nHost Recommendation: {rec.primary_host} [{rec.confidence} confidence]")
+        print(f"  Reasoning: {rec.reasoning}")
+        if rec.alternative_hosts:
+            print(f"  Alternatives: {', '.join(rec.alternative_hosts)}")
+        for caveat in rec.caveats:
+            print(f"  ! {caveat}")
 
     warnings = result.get("warnings", [])
     if warnings:
@@ -216,6 +226,23 @@ def _write_artifacts(result: dict, compound_id: str, output_dir: str):
             "chains": [{"id": c.id, "length": c.length} for c in pr.chains],
         }
 
+    rec = result.get("host_recommendation")
+    if rec:
+        summary["host_recommendation"] = {
+            "primary_host": rec.primary_host,
+            "confidence": rec.confidence,
+            "reasoning": rec.reasoning,
+            "alternative_hosts": list(rec.alternative_hosts),
+            "caveats": list(rec.caveats),
+            "features": {
+                "total_chain_length": rec.features.total_chain_length,
+                "n_glycosylation_sites": rec.features.n_glycosylation_sites,
+                "total_cysteine_count": rec.features.total_cysteine_count,
+                "disulfide_risk": rec.features.disulfide_risk,
+                "max_gravy": rec.features.max_gravy,
+            },
+        }
+
     json_path = out / f"{compound_id}_summary.json"
     json_path.write_text(json.dumps(summary, indent=2, default=str))
     print(f"  Wrote {json_path}")
@@ -225,6 +252,18 @@ def _write_artifacts(result: dict, compound_id: str, output_dir: str):
         protocol_path = out / "protocol.md"
         protocol_path.write_text(protocol)
         print(f"  Wrote {protocol_path}")
+
+    # LC-MS/MS peptide mass tables (one TSV per chain, always written)
+    protein_record = result.get("protein_record")
+    if protein_record:
+        from aixbio.tools.ms_prediction import format_tsv, predict_ms_peptides
+        for chain in protein_record.chains:
+            safe_id = chain.id.replace(" ", "_").replace("/", "_")
+            rows = predict_ms_peptides(chain.id, chain.aa_sequence)
+            if rows:
+                tsv_path = out / f"{safe_id}_peptides.tsv"
+                tsv_path.write_text(format_tsv(rows))
+                print(f"  Wrote {tsv_path} ({len(rows)} tryptic peptides)")
 
     print(f"\nAll artifacts written to {out}/")
 

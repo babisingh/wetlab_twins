@@ -11,8 +11,9 @@ def human_checkpoint_chains(state: PipelineState) -> dict:
         return {"pipeline_status": "halted"}
 
     reasoning = state.get("chain_extraction_reasoning", "")
+    rec = state.get("host_recommendation")
 
-    decision = interrupt({
+    interrupt_data: dict = {
         "stage": "chain_extraction_review",
         "protein": protein.name,
         "uniprot_id": protein.uniprot_id,
@@ -26,7 +27,18 @@ def human_checkpoint_chains(state: PipelineState) -> dict:
         ],
         "agent_reasoning": reasoning,
         "question": "Approve chain extraction? Reply 'approve', 'reject', or provide corrections as JSON.",
-    })
+    }
+
+    if rec is not None:
+        interrupt_data["host_recommendation"] = {
+            "primary_host": rec.primary_host,
+            "confidence": rec.confidence,
+            "reasoning": rec.reasoning,
+            "alternative_hosts": list(rec.alternative_hosts),
+            "caveats": list(rec.caveats),
+        }
+
+    decision = interrupt(interrupt_data)
 
     if decision == "reject":
         return {"pipeline_status": "halted"}

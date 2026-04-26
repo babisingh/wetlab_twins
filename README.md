@@ -30,20 +30,21 @@ The pipeline is a two-level LangGraph `StateGraph`. Each level is independently 
 ```
 Main graph
 ├── sequence_retrieval          fetch & parse UniProt, extract mature chains (deterministic)
-├── human_checkpoint_chains     review extracted chains before processing
-├── chain_processing × N        fan-out: one subgraph run per protein chain
+├── host_selection              recommend E. coli / P. pastoris / CHO / Sf9 from sequence features
+├── human_checkpoint_chains     review chains + host recommendation before processing
+├── chain_processing × N        fan-out: one subgraph per chain
 │   └── Chain subgraph
-│       ├── solubility_prediction  composition-based inclusion body / disulfide risk score
-│       ├── codon_optimization     greedy best-codon assignment + restriction avoidance
-│       ├── cassette_assembly      ATG + 6×His tag + protease site + gene + stop
+│       ├── solubility_prediction  composition heuristic: inclusion body / disulfide risk score
+│       ├── codon_optimization     greedy best-codon assignment + restriction site avoidance
+│       ├── cassette_assembly      ATG + 6×His tag + Enterokinase site + gene + stop
 │       ├── plasmid_assembly       insert cassette into pET-28a(+) vector
-│       ├── sequence_validation    7 independent checks (see below)
+│       ├── sequence_validation    7 independent checks (GC, CAI, sites, RNA, identity, rare codons, repeats)
 │       └── remediation loop       synonymous swaps → revalidate (up to 3 attempts)
 │           └── escalation_agent (LLM, optional) fires once if loop exhausted
-├── merge_results               collect all chain outcomes
-├── human_checkpoint_plasmid    review assembled plasmids
+├── merge_results               collect all chain outcomes + aggregate validation
+├── human_checkpoint_plasmid    review assembled plasmids before export
 ├── structural_validation       (optional) ESMFold/AlphaFold confidence check
-└── protocol_generation         (optional) literature-backed wet-lab SOP (LLM + PubMed)
+└── protocol_generation         (optional) PubMed fetch + LLM → literature-backed wet-lab SOP
 ```
 
 ## Modularity
@@ -177,3 +178,211 @@ uv run pytest tests/test_escalation.py              # escalation agent (mocked L
 ## Environment
 
 Requires `OPENROUTER_API_KEY` in `.env`. Set `LLM_MODEL` to use a different model via OpenRouter.
+Copy `.env.example` to `.env` and fill in your key.
+
+---
+
+## Insulin demo — full user journey
+
+This section walks through the complete pipeline for human insulin (P01308) end to end.
+
+### 1. Setup
+
+```bash
+git clone https://github.com/babisingh/wetlab_twins
+cd wetlab_twins
+uv sync
+cp .env.example .env          # add your OPENROUTER_API_KEY
+```
+
+### 2. Run (fully automated, with protocol)
+
+```bash
+uv run aixbio P01308 --auto-approve --protocol
+```
+
+### 3. Annotated terminal output
+
+```
+Starting pipeline for P01308 targeting Escherichia coli
+============================================================
+
+# Step 1 — UniProt fetch + chain extraction (deterministic)
+# Parses "Chain" feature annotations to get mature A and B chains.
+
+HUMAN REVIEW: chain_extraction_review          ← --auto-approve bypasses this
+============================================================
+{
+  "protein": "Insulin",
+  "uniprot_id": "P01308",
+  "chains_extracted": [
+    {"id": "Insulin_A_chain", "length": 21, "sequence_preview": "GIVEQCCTSICSLYQLENYCN"},
+    {"id": "Insulin_B_chain", "length": 30, "sequence_preview": "FVNQHLCGSHLVEALYLVCGERGFFYTPKT..."}
+  ],
+  "host_recommendation": {
+    "primary_host": "Escherichia coli",
+    "confidence": "medium",
+    "reasoning": "Short protein (51 aa) with 6 cysteines. E. coli expression as
+                  inclusion bodies followed by oxidative refolding is the
+                  established route (e.g. recombinant insulin).",
+    "alternative_hosts": ["Pichia pastoris"],
+    "caveats": [
+      "Denaturing lysis (urea/guanidinium) required.",
+      "Refolding yield is protein-dependent; optimise glutathione redox ratio."
+    ]
+  }
+}
+Auto-approving (--auto-approve flag)
+
+# Steps 2–5 run in parallel for Chain A and Chain B:
+
+# Chain A — solubility_prediction
+# [Insulin_A_chain] Solubility score 0.42 < 0.45 — inclusion body formation likely.
+# [Insulin_A_chain] 4 cysteine residues — disulfide refolding required.
+
+# Chain B — solubility_prediction
+# [Insulin_B_chain] 2 cysteine residues — disulfide refolding required.
+
+# Both chains pass all 7 validation checks after codon optimisation.
+
+HUMAN REVIEW: plasmid_review                   ← --auto-approve bypasses this
+============================================================
+{
+  "chain_results": [
+    {"chain_id": "Insulin_A_chain", "validation_passed": true,
+     "remediation_rounds": 0, "insert_size": 171},
+    {"chain_id": "Insulin_B_chain", "validation_passed": true,
+     "remediation_rounds": 0, "insert_size": 198}
+  ]
+}
+Auto-approving (--auto-approve flag)
+
+# --protocol: PubMed fetches top 5 E. coli insulin expression papers,
+# then LLM synthesises the SOP with PMID citations.
+
+============================================================
+PIPELINE RESULTS
+============================================================
+Status: completed
+
+Host Recommendation: Escherichia coli [medium confidence]
+  Reasoning: Short protein (51 aa) with 6 cysteines...
+  Alternatives: Pichia pastoris
+  ! Denaturing lysis (urea/guanidinium) required.
+  ! Refolding yield is protein-dependent; optimise glutathione redox ratio.
+
+Warnings (4):
+  - [Insulin_A_chain] Solubility score 0.42 — inclusion body formation likely...
+  - [Insulin_A_chain] 4 cysteine residues — disulfide refolding required.
+  - [Insulin_B_chain] 2 cysteine residues — disulfide refolding required.
+  - [host_selection] Denaturing lysis (urea/guanidinium) required.
+
+Validation: PASSED
+  Chain Insulin_A_chain: PASS
+    [+] gc_content: 0.544 (threshold: 0.50-0.60)
+    [+] cai_score: 0.962 (threshold: >0.80)
+    [+] restriction_sites: none (threshold: 0 internal hits)
+    [+] rna_secondary_structure: -4.2 kcal/mol (threshold: >-10)
+    [+] back_translation: match (threshold: 100%)
+    [+] rare_codons: none (threshold: 0)
+    [+] direct_repeats: none (threshold: 0 repeats >= 20 bp)
+  Chain Insulin_B_chain: PASS
+    [+] gc_content: 0.551 ...
+    [+] cai_score: 0.971 ...
+    ...
+
+Chain Results (2):
+  Insulin_A_chain:
+    Insert size: 171 bp
+    Remediation rounds: 0
+    Validation passed: True
+    Solubility: 0.42 [INCLUSION BODY RISK]
+    Disulfide risk: YES (refolding required)
+  Insulin_B_chain:
+    Insert size: 198 bp
+    Remediation rounds: 0
+    Validation passed: True
+    Solubility: 0.53 [SOLUBLE]
+    Disulfide risk: YES (refolding required)
+
+Protocol generated (4821 chars) — written to output/protocol.md
+
+  Wrote output/Insulin_A_chain.fasta
+  Wrote output/Insulin_A_chain_plasmid.gb
+  Wrote output/Insulin_B_chain.fasta
+  Wrote output/Insulin_B_chain_plasmid.gb
+  Wrote output/Insulin_A_chain_peptides.tsv (4 tryptic peptides)
+  Wrote output/Insulin_B_chain_peptides.tsv (3 tryptic peptides)
+  Wrote output/P01308_summary.json
+
+All artifacts written to output/
+```
+
+### 4. Output files explained
+
+| File | Contents |
+|---|---|
+| `Insulin_A_chain.fasta` | E. coli codon-optimised DNA for the mature A-chain |
+| `Insulin_B_chain.fasta` | E. coli codon-optimised DNA for the mature B-chain |
+| `Insulin_A_chain_plasmid.gb` | Annotated GenBank record: pET-28a(+) + ATG + 6×His + EK site + A-chain + stop |
+| `Insulin_B_chain_plasmid.gb` | Same for B-chain |
+| `Insulin_A_chain_peptides.tsv` | Tryptic peptide masses for A-chain (LC-MS/MS QC reference) |
+| `Insulin_B_chain_peptides.tsv` | Tryptic peptide masses for B-chain |
+| `P01308_summary.json` | Machine-readable summary: validation checks, solubility scores, host recommendation |
+| `protocol.md` | Full bench SOP with literature citations (only with `--protocol`) |
+
+### 5. Peptide mass table (B-chain excerpt)
+
+```
+chain_id        peptide                   start  end  length  mono_mass    mz_2+      mz_3+
+Insulin_B_chain FVNQHLCGSHLVEALYLVCGER    1      22   22      2431.1742    1216.5943  811.3990
+Insulin_B_chain GFFYTPK                   23     29   7       837.4198     419.7171   280.1490
+Insulin_B_chain T                         30     30   1       119.0582     60.5363    40.6932
+```
+
+This table lets a mass spectrometrist verify protein identity after tryptic digest without running the full experiment first.
+
+### 6. Generated SOP excerpt (`protocol.md`)
+
+```markdown
+# Protocol: Insulin Expression and Purification in E. coli
+
+## Literature Context
+Prior studies (PMID:2063194, PMID:7592457) established that recombinant human insulin
+chains can be expressed in E. coli BL21(DE3) as inclusion bodies and refolded in vitro
+with high yield using a glutathione redox system...
+
+## 1. Strains, Plasmid, and Safety Notes
+- **Host:** E. coli BL21(DE3)
+- **Vector:** pET-28a(+) with BamHI/XhoI cloning sites
+- **Insert A:** Insulin A-chain (21 aa) with N-terminal 6×His tag + Enterokinase site
+- **Insert B:** Insulin B-chain (30 aa) with N-terminal 6×His tag + Enterokinase site
+
+## 2. Transformation
+a. Thaw 50 µL competent BL21(DE3) cells on ice (5 min).
+b. Add 1 µL plasmid DNA (10–50 ng). Mix gently.
+c. Heat shock: 42°C, 30 s. Return to ice 2 min.
+d. Add 950 µL SOC medium. Recover 37°C, 250 rpm, 1 h.
+e. Plate 100 µL on LB + kanamycin (50 µg/mL). Incubate 37°C overnight.
+...
+
+## 8. Inclusion Body Refolding
+⚠ Required: both chains have disulfide bonds that will not form in the E. coli cytoplasm.
+
+a. Resuspend inclusion body pellet in denaturing buffer:
+   6 M guanidinium HCl, 50 mM Tris-HCl pH 8.0, 1 mM EDTA, 100 mM DTT.
+b. Stir at RT for 2 h to fully solubilise.
+c. Clarify by centrifugation 20 000 × g, 30 min, 4°C.
+d. Dialyse chain A and chain B separately against refolding buffer:
+   0.1 M Tris-HCl pH 8.0, 0.5 M L-arginine, 1 mM EDTA,
+   2 mM reduced glutathione (GSH), 0.2 mM oxidised glutathione (GSSG).
+e. Combine chain A and B in a 1:1 molar ratio. Stir 16 h at 4°C.
+f. Monitor refolding by RP-HPLC or native PAGE.
+...
+```
+
+### 7. What happens without `--protocol`
+
+The pipeline still produces validated GenBank files, FASTA sequences, a peptide mass table, and the
+JSON summary — all with zero LLM calls beyond the initial UniProt fetch. Add `--protocol` only when
+you are ready to hand the design to the bench.

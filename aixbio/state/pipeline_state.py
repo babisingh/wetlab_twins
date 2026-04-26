@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Annotated, Literal, TypedDict
 
 from aixbio.models.audit import AgentDecision
+from aixbio.models.host import HostRecommendation
 from aixbio.models.protein import ProteinRecord
 from aixbio.models.remediation import RemediationAction
 from aixbio.models.structure import StructureReport
@@ -63,6 +64,9 @@ class PipelineState(TypedDict):
     # Step 1 output
     protein_record: ProteinRecord | None
     chain_extraction_reasoning: str
+
+    # Host recommendation (runs after sequence_retrieval, before fan-out)
+    host_recommendation: HostRecommendation | None
 
     # Per-chain results (fan-out merge target)
     chain_results: Annotated[list[ChainProcessingResult], append_log]
