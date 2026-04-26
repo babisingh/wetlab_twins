@@ -52,6 +52,7 @@ def _make_input_state(**overrides):
         "vector": "pET-28a(+)",
         "cloning_sites": ("BamHI", "XhoI"),
         "protein_record": PROTEIN,
+        "solubility_result": None,
         "optimized_dna": None,
         "cassette": None,
         "plasmid": None,

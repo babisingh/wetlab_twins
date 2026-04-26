@@ -15,6 +15,7 @@ from aixbio.nodes.plasmid_assembly import plasmid_assembly
 from aixbio.nodes.remediation_agent import apply_fixes, remediation_agent
 from aixbio.nodes.routers import escalation_router, revalidation_router, validation_router
 from aixbio.nodes.sequence_validation import sequence_validation
+from aixbio.nodes.solubility_prediction import solubility_prediction
 from aixbio.state.chain_state import ChainSubgraphState
 
 _VALIDATION_MAP = {
@@ -35,6 +36,9 @@ _ESCALATION_MAP = {
 
 def build_chain_subgraph() -> StateGraph:
     g = StateGraph(ChainSubgraphState)
+
+    # Step 1 (chain subgraph): solubility / inclusion-body prediction
+    g.add_node("solubility_prediction", solubility_prediction)
 
     # Steps 2-4: linear pipeline
     g.add_node("codon_optimization", codon_optimization)
@@ -61,7 +65,8 @@ def build_chain_subgraph() -> StateGraph:
     g.add_node("halt_pipeline", halt_pipeline)
 
     # Linear pipeline edges
-    g.add_edge(START, "codon_optimization")
+    g.add_edge(START, "solubility_prediction")
+    g.add_edge("solubility_prediction", "codon_optimization")
     g.add_edge("codon_optimization", "cassette_assembly")
     g.add_edge("cassette_assembly", "plasmid_assembly")
     g.add_edge("plasmid_assembly", "sequence_validation")

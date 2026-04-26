@@ -20,6 +20,7 @@ uv run aixbio P01308                   # interactive (human review prompts)
 uv run aixbio P01308 --auto-approve    # fully automated
 uv run aixbio P01308 --escalation      # enable LLM fallback on hard failures
 uv run aixbio P01308 --structural      # add ESMFold/AlphaFold structure check
+uv run aixbio P01308 --protocol        # generate literature-backed wet-lab SOP
 ```
 
 ## Pipeline overview
@@ -32,15 +33,17 @@ Main graph
 ├── human_checkpoint_chains     review extracted chains before processing
 ├── chain_processing × N        fan-out: one subgraph run per protein chain
 │   └── Chain subgraph
-│       ├── codon_optimization  greedy best-codon assignment + restriction avoidance
-│       ├── cassette_assembly   ATG + 6×His tag + protease site + gene + stop
-│       ├── plasmid_assembly    insert cassette into pET-28a(+) vector
-│       ├── sequence_validation 7 independent checks (see below)
-│       └── remediation loop   synonymous swaps → revalidate (up to 3 attempts)
+│       ├── solubility_prediction  composition-based inclusion body / disulfide risk score
+│       ├── codon_optimization     greedy best-codon assignment + restriction avoidance
+│       ├── cassette_assembly      ATG + 6×His tag + protease site + gene + stop
+│       ├── plasmid_assembly       insert cassette into pET-28a(+) vector
+│       ├── sequence_validation    7 independent checks (see below)
+│       └── remediation loop       synonymous swaps → revalidate (up to 3 attempts)
 │           └── escalation_agent (LLM, optional) fires once if loop exhausted
 ├── merge_results               collect all chain outcomes
 ├── human_checkpoint_plasmid    review assembled plasmids
-└── structural_validation       (optional) ESMFold/AlphaFold confidence check
+├── structural_validation       (optional) ESMFold/AlphaFold confidence check
+└── protocol_generation         (optional) literature-backed wet-lab SOP (LLM + PubMed)
 ```
 
 ## Modularity
@@ -108,6 +111,36 @@ Two optional review gates pause the pipeline for human approval:
 2. **After plasmid assembly** — review the final constructs before export
 
 Both gates are bypassed with `--auto-approve`.
+
+### Solubility and inclusion body prediction
+
+Every chain is assessed for E. coli expression solubility before codon optimisation begins. The
+deterministic heuristic (Biopython `ProteinAnalysis`, no network call) scores four features:
+
+| Feature | Direction | Weight |
+|---|---|---|
+| GRAVY score | lower = more soluble | 35% |
+| Instability index | < 40 = more stable | 30% |
+| Charged residue fraction (D/E/K/R) | higher = more soluble | 20% |
+| pI deviation from pH 7 | closer to 7 = more soluble | 15% |
+
+Score 0.0–1.0; **≥ 0.45 = predicted soluble** (Protein-Sol calibration, Hebditch et al. 2017).
+Any chain with ≥ 2 cysteines is independently flagged for **disulfide risk** regardless of score.
+Warnings and tag recommendations (MBP, SUMO) are surfaced in the pipeline output and carried into
+the protocol if `--protocol` is used.
+
+### Literature-backed wet-lab SOP (`--protocol`)
+
+Add `--protocol` to generate a full bench SOP after the pipeline completes. The node:
+
+1. Queries PubMed E-utilities (no API key needed) for the top 5 expression papers for this protein.
+2. Compiles structured context: protein metadata, solubility scores, validation metrics,
+   tag/vector/host configuration.
+3. Calls the LLM to synthesise a numbered, literature-cited SOP covering transformation,
+   induction conditions, lysis, IMAC purification, Enterokinase tag removal, and — for
+   disulfide-rich proteins like insulin — a dedicated inclusion body refolding section.
+
+Output is written to `output/protocol.md` alongside the GenBank and FASTA files.
 
 ### Audit trail
 

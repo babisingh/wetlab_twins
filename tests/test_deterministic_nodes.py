@@ -30,6 +30,7 @@ def _make_chain_state(**overrides):
         "vector": "pET-28a(+)",
         "cloning_sites": ("BamHI", "XhoI"),
         "protein_record": PROTEIN_RECORD,
+        "solubility_result": None,
         "optimized_dna": None,
         "cassette": None,
         "plasmid": None,

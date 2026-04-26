@@ -29,6 +29,7 @@ def main():
     parser.add_argument("--max-retries", type=int, default=DEFAULT_MAX_REMEDIATION_ATTEMPTS)
     parser.add_argument("--auto-approve", action="store_true", help="Skip human checkpoints")
     parser.add_argument("--escalation", action="store_true", help="Enable LLM escalation agent on remediation exhaustion")
+    parser.add_argument("--protocol", action="store_true", help="Generate literature-backed wet-lab SOP after pipeline completes")
     parser.add_argument("--output-dir", default="output", help="Directory for output files")
     args = parser.parse_args()
 
@@ -44,8 +45,10 @@ def main():
         "vector": DEFAULT_VECTOR,
         "cloning_sites": DEFAULT_CLONING_SITES,
         "run_structural_validation": args.structural,
+        "run_protocol_generation": args.protocol,
         "enable_escalation": args.escalation,
         "protein_record": None,
+        "protocol": None,
         "chain_extraction_reasoning": "",
         "chain_results": [],
         "validation_report": None,
@@ -141,6 +144,16 @@ def _print_results(result: dict):
             print(f"    Insert size: {cr['insert_size']} bp")
             print(f"    Remediation rounds: {cr['remediation_rounds']}")
             print(f"    Validation passed: {cr['validation_passed']}")
+            sol_score = cr.get("solubility_score")
+            if sol_score is not None:
+                sol_label = "SOLUBLE" if sol_score >= 0.45 else "INCLUSION BODY RISK"
+                print(f"    Solubility: {sol_score:.2f} [{sol_label}]")
+            if cr.get("disulfide_risk"):
+                print(f"    Disulfide risk: YES (refolding required)")
+
+    protocol = result.get("protocol")
+    if protocol:
+        print(f"\nProtocol generated ({len(protocol)} chars) — written to output/protocol.md")
 
     decisions = result.get("decision_log", [])
     if decisions:
@@ -185,6 +198,8 @@ def _write_artifacts(result: dict, compound_id: str, output_dir: str):
                 "validation_passed": cr["validation_passed"],
                 "remediation_rounds": cr["remediation_rounds"],
                 "status": cr["status"],
+                "solubility_score": cr.get("solubility_score"),
+                "disulfide_risk": cr.get("disulfide_risk", False),
                 "checks": [
                     {"name": c.name, "passed": c.passed, "value": c.value, "threshold": c.threshold}
                     for c in cr.get("checks", ())
@@ -204,6 +219,13 @@ def _write_artifacts(result: dict, compound_id: str, output_dir: str):
     json_path = out / f"{compound_id}_summary.json"
     json_path.write_text(json.dumps(summary, indent=2, default=str))
     print(f"  Wrote {json_path}")
+
+    protocol = result.get("protocol")
+    if protocol:
+        protocol_path = out / "protocol.md"
+        protocol_path.write_text(protocol)
+        print(f"  Wrote {protocol_path}")
+
     print(f"\nAll artifacts written to {out}/")
 
 
