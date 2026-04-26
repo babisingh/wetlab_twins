@@ -25,7 +25,6 @@ def _make_chain_state(**overrides):
         "chain": INSULIN_B_CHAIN,
         "host_organism": "Escherichia coli",
         "avoid_sites": get_native_enzymes("Escherichia coli"),
-
         "tag_type": "6xHis",
         "protease_site": "Enterokinase",
         "vector": "pET-28a(+)",
@@ -70,7 +69,7 @@ def test_cassette_assembly():
     assert cassette.id == "Insulin_B"
     assert cassette.full_dna.startswith("ATG")
     assert cassette.full_dna.endswith("TAATAA")
-    assert cassette.elements.tag == "CACCACCACCACCACCAC"  # 6×His = CAC×6 = 18 nt
+    assert cassette.elements.tag == "CACCACCACCACCACCAC"
     assert opt_result["optimized_dna"].dna_sequence in cassette.full_dna
 
 
@@ -96,7 +95,6 @@ def test_sequence_validation():
     state = _make_chain_state()
     opt_result = codon_optimization(state)
     state = _make_chain_state(optimized_dna=opt_result["optimized_dna"])
-    # Build cassette so validation checks the full construct (Issue #2)
     cas_result = cassette_assembly(state)
     state = _make_chain_state(
         optimized_dna=opt_result["optimized_dna"],
@@ -106,12 +104,13 @@ def test_sequence_validation():
     validation = result["chain_validation"]
 
     assert validation.id == "Insulin_B"
-    assert len(validation.checks) == 6
+    assert len(validation.checks) == 7
 
     check_names = {c.name for c in validation.checks}
     assert check_names == {
         "gc_content", "cai_score", "restriction_sites",
         "rna_secondary_structure", "back_translation", "rare_codons",
+        "direct_repeats",
     }
 
     back_translation = next(c for c in validation.checks if c.name == "back_translation")

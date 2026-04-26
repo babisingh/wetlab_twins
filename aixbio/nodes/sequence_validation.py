@@ -5,6 +5,7 @@ from aixbio.state.chain_state import ChainSubgraphState
 from aixbio.tools.cai import compute_cai
 from aixbio.tools.codon_tables import RARE_CODONS_ECOLI, split_codons, translate_dna
 from aixbio.tools.gc import compute_gc
+from aixbio.tools.repeats import find_direct_repeats
 from aixbio.tools.restriction_sites import find_restriction_sites
 from aixbio.tools.rna_fold import estimate_five_prime_dg
 
@@ -15,13 +16,9 @@ def sequence_validation(state: ChainSubgraphState) -> dict:
     cloning_sites = state["cloning_sites"]
     cassette = state.get("cassette")
 
-    # The gene-only DNA (for back-translation check)
     gene_dna = dna_chain.dna_sequence
 
-    # The full expression construct (for all other checks).
-    # If cassette is available, validate the actual construct that enters the
-    # host cell: ATG + tag + protease + gene + stop.  Falls back to gene-only
-    # when cassette hasn't been assembled yet.
+    # Validate the full construct when cassette is assembled; gene-only otherwise.
     construct_dna = cassette.full_dna if cassette else gene_dna
 
     checks: list[CheckResult] = []
@@ -34,7 +31,7 @@ def sequence_validation(state: ChainSubgraphState) -> dict:
         threshold="0.50-0.60",
     ))
 
-    cai = compute_cai(gene_dna)  # CAI is meaningful only for the coding gene
+    cai = compute_cai(gene_dna)
     checks.append(CheckResult(
         name="cai_score",
         passed=cai > 0.8,
@@ -42,8 +39,6 @@ def sequence_validation(state: ChainSubgraphState) -> dict:
         threshold="> 0.8",
     ))
 
-    # Check for restriction sites in the construct, but exclude the
-    # intentional cloning-site positions at the flanks (Issue #9).
     sites = find_restriction_sites(construct_dna, cloning_sites)
     checks.append(CheckResult(
         name="restriction_sites",
@@ -52,8 +47,6 @@ def sequence_validation(state: ChainSubgraphState) -> dict:
         threshold="0 hits",
     ))
 
-    # RNA secondary structure in the 5' region — the ribosome encounters the
-    # tag region first (not the gene), so this must be checked on the construct.
     dg = estimate_five_prime_dg(construct_dna)
     checks.append(CheckResult(
         name="rna_secondary_structure",
@@ -79,6 +72,16 @@ def sequence_validation(state: ChainSubgraphState) -> dict:
         passed=rare_count == 0,
         value=rare_count,
         threshold="0",
+    ))
+
+    # Direct repeats >= 20 bp can cause RecA-independent deletion in E. coli.
+    # The 6xHis tag's 18 bp CAC repeat is intentionally below this threshold.
+    repeats = find_direct_repeats(construct_dna, min_len=20)
+    checks.append(CheckResult(
+        name="direct_repeats",
+        passed=len(repeats) == 0,
+        value=len(repeats) if repeats else "none",
+        threshold="0 repeats >= 20 bp",
     ))
 
     all_passed = all(c.passed for c in checks)

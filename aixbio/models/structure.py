@@ -10,6 +10,8 @@ class StructureResult:
     rmsd_to_ref: float | None
     perplexity: float | None
     structure_file: str
+    # "esmfold" | "afdb" | "afdb_fallback" | "esmfold_failed" | "unknown"
+    method: str = "unknown"
 
 
 @dataclass(frozen=True)

@@ -5,7 +5,9 @@ import os
 import tempfile
 
 import httpx
-from Bio.PDB import MMCIFParser, Superimposer
+from Bio.Align import PairwiseAligner
+from Bio.PDB import MMCIFParser, PDBParser, Superimposer
+from Bio.PDB.Polypeptide import protein_letters_3to1
 
 from aixbio.models.structure import StructureResult
 
@@ -17,16 +19,83 @@ _TIMEOUT = 60
 _MAX_RETRIES = 3
 _BACKOFF_BASE = 1.0
 
+# Sequence aligner shared across calls — stateless, thread-safe after setup.
+_ALIGNER = PairwiseAligner()
+_ALIGNER.mode = "global"
+_ALIGNER.match_score = 2
+_ALIGNER.mismatch_score = -1
+_ALIGNER.open_gap_score = -4
+_ALIGNER.extend_gap_score = -0.5
 
-def _extract_ca_atoms(structure) -> list:
-    return [
-        atom
-        for model in structure
-        for chain in model
-        for residue in chain
-        if residue.id[0] == " " and "CA" in residue
-        for atom in [residue["CA"]]
-    ]
+
+def _load_structure(path: str, entry_id: str):
+    """Parse CIF or PDB based on file extension."""
+    ext = os.path.splitext(path)[1].lower()
+    if ext in (".cif", ".mmcif"):
+        return MMCIFParser(QUIET=True).get_structure(entry_id, path)
+    return PDBParser(QUIET=True).get_structure(entry_id, path)
+
+
+def _get_chain_residues(structure) -> dict[str, list]:
+    """Return {chain_id: [standard residues]} from the first model."""
+    result: dict[str, list] = {}
+    for model in structure:
+        for chain in model:
+            residues = [r for r in chain if r.id[0] == " " and "CA" in r]
+            if residues:
+                result[chain.id] = residues
+        break  # first model only
+    return result
+
+
+def _residues_to_seq(residues: list) -> str:
+    return "".join(protein_letters_3to1.get(r.resname, "X") for r in residues)
+
+
+def _best_ref_chain(
+    query_aa: str,
+    ref_chains: dict[str, list],
+) -> tuple[str, list] | tuple[None, None]:
+    """Select the reference chain whose sequence best aligns to query_aa."""
+    best_id: str | None = None
+    best_score = -float("inf")
+    for chain_id, residues in ref_chains.items():
+        ref_seq = _residues_to_seq(residues)
+        try:
+            score = _ALIGNER.score(query_aa, ref_seq)
+        except Exception:
+            continue
+        if score > best_score:
+            best_score = score
+            best_id = chain_id
+    if best_id is None:
+        return None, None
+    return best_id, ref_chains[best_id]
+
+
+def _aligned_ca_pairs(
+    query_seq: str,
+    ref_seq: str,
+    query_res: list,
+    ref_res: list,
+) -> tuple[list, list]:
+    """Return paired (query_CA, ref_CA) atom lists for sequence-aligned positions."""
+    try:
+        alignments = list(_ALIGNER.align(query_seq, ref_seq))
+    except Exception:
+        return [], []
+    if not alignments:
+        return [], []
+
+    aln = alignments[0]
+    q_ca: list = []
+    r_ca: list = []
+    for (qs, qe), (rs, re) in zip(aln.aligned[0], aln.aligned[1]):
+        for qi, ri in zip(range(qs, qe), range(rs, re)):
+            if qi < len(query_res) and ri < len(ref_res):
+                q_ca.append(query_res[qi]["CA"])
+                r_ca.append(ref_res[ri]["CA"])
+    return q_ca, r_ca
 
 
 def _download_reference_cif(pdb_id: str, dest_dir: str) -> str | None:
@@ -45,36 +114,60 @@ def _download_reference_cif(pdb_id: str, dest_dir: str) -> str | None:
 
 
 def _compute_rmsd(
-    alphafold_cif_path: str,
+    query_struct_path: str,
     reference_pdb_id: str,
-    af_entry_id: str,
+    query_entry_id: str,
+    query_aa: str,
 ) -> float | None:
+    """Compute Cα RMSD using sequence-guided alignment.
+
+    Fixes three bugs in the original implementation:
+    1. Multi-chain reference PDBs: selects the chain whose sequence best
+       matches query_aa rather than concatenating all chains.
+    2. Length mismatch / signal peptide offsets: uses pairwise alignment
+       to match only corresponding residues before superimposing.
+    3. Wrong atom selection: only paired Cα atoms from the alignment are
+       passed to Superimposer, never a raw positional slice.
+    """
     try:
         tmpdir = tempfile.mkdtemp(prefix="pdb_ref_")
         ref_path = _download_reference_cif(reference_pdb_id, tmpdir)
         if ref_path is None:
             return None
 
-        parser = MMCIFParser(QUIET=True)
-        af_struct = parser.get_structure(af_entry_id, alphafold_cif_path)
-        ref_struct = parser.get_structure(reference_pdb_id, ref_path)
+        query_struct = _load_structure(query_struct_path, query_entry_id)
+        ref_struct = _load_structure(ref_path, reference_pdb_id)
 
-        af_ca = _extract_ca_atoms(af_struct)
-        ref_ca = _extract_ca_atoms(ref_struct)
+        query_chains = _get_chain_residues(query_struct)
+        ref_chains = _get_chain_residues(ref_struct)
 
-        n = min(len(af_ca), len(ref_ca))
-        if n < 3:
+        if not query_chains or not ref_chains:
+            return None
+
+        query_res = next(iter(query_chains.values()))
+        query_seq = _residues_to_seq(query_res)
+
+        _, ref_res = _best_ref_chain(query_aa, ref_chains)
+        if ref_res is None:
+            return None
+        ref_seq = _residues_to_seq(ref_res)
+
+        q_ca, r_ca = _aligned_ca_pairs(query_seq, ref_seq, query_res, ref_res)
+
+        if len(q_ca) < 3:
             logger.warning(
-                f"Too few CA atoms to superimpose ({len(af_ca)} vs {len(ref_ca)})"
+                f"Too few aligned Cα atoms for RMSD ({len(q_ca)}) — "
+                f"query={len(query_res)} res, ref={len(ref_res)} res"
             )
             return None
 
         sup = Superimposer()
-        sup.set_atoms(ref_ca[:n], af_ca[:n])
+        sup.set_atoms(r_ca, q_ca)
         return round(float(sup.rms), 3)
+
     except Exception:
         logger.warning(
-            f"RMSD computation failed for {af_entry_id} vs {reference_pdb_id}",
+            f"RMSD computation failed for {query_entry_id} vs {reference_pdb_id}",
             exc_info=True,
         )
         return None
@@ -119,13 +212,14 @@ async def _download_cif(cif_url: str, dest_path: str) -> None:
 async def predict_structure(
     chain_id: str,
     uniprot_id: str,
+    aa_sequence: str,
     reference_pdb: str | None = None,
 ) -> StructureResult:
-    """Look up an AlphaFold predicted structure from the AlphaFold DB.
+    """Fetch a pre-computed AlphaFold DB structure for uniprot_id.
 
-    Uses the AlphaFold Protein Structure Database API at alphafold.com
-    (Biopython-compatible endpoints) to retrieve pre-computed predictions
-    and optionally compute RMSD against a reference PDB.
+    aa_sequence is the actual mature chain sequence produced by the pipeline.
+    It is used to select the correct chain in a multimer reference PDB and to
+    align residues before Cα superimposition.
     """
     predictions = await _fetch_predictions(uniprot_id)
 
@@ -137,6 +231,7 @@ async def predict_structure(
             rmsd_to_ref=None,
             perplexity=None,
             structure_file="",
+            method="afdb_fallback",
         )
 
     pred = predictions[0]
@@ -157,10 +252,10 @@ async def predict_structure(
             logger.info(f"Downloaded AlphaFold structure to {cif_path}")
 
         if reference_pdb:
-            rmsd = _compute_rmsd(cif_path, reference_pdb, entry_id)
+            rmsd = _compute_rmsd(cif_path, reference_pdb, entry_id, aa_sequence)
 
     logger.info(
-        f"AlphaFold prediction for {uniprot_id} chain '{chain_id}': "
+        f"AFDB prediction for {uniprot_id} (chain '{chain_id}'): "
         f"pLDDT={plddt_mean:.1f}, RMSD={rmsd}"
     )
 
@@ -170,4 +265,5 @@ async def predict_structure(
         rmsd_to_ref=rmsd,
         perplexity=None,
         structure_file=cif_path,
+        method="afdb",
     )
