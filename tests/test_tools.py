@@ -248,3 +248,73 @@ def test_ms_format_tsv():
     tsv = format_tsv(rows)
     assert tsv.startswith("chain_id\tpeptide\tstart\tend\tlength\tmono_mass\tmz_2+\tmz_3+")
     assert "Insulin_B" in tsv
+
+
+# ---------------------------------------------------------------------------
+# Synthesis feasibility
+# ---------------------------------------------------------------------------
+
+def _make_insulin_b_cassette():
+    """Build the real insulin B-chain cassette the pipeline would produce."""
+    from aixbio.tools.codon_tables import best_ecoli_codon
+    gene = "".join(best_ecoli_codon(aa) for aa in "FVNQHLCGSHLVEALYLVCGERGFFYTPKT")
+    # ATG + 6xHis + EK site + gene + TAATAA  (same as cassette_assembly.py)
+    return "ATG" + "CACCACCACCACCACCAC" + "GACGACGACAAAGAC" + gene + "TAATAA"
+
+
+def test_synthesis_insulin_b_idt_feasible():
+    from aixbio.tools.synthesis_feasibility import get_synthesis_quotes
+    cassette = _make_insulin_b_cassette()
+    q = get_synthesis_quotes("Insulin_B", cassette)
+    assert q.sequence_length > 125          # within IDT range
+    assert 0.25 <= q.gc_content <= 0.65     # healthy GC
+    idt = next(vq for vq in q.quotes if vq.vendor == "IDT")
+    assert idt.feasible, f"IDT rejected insulin B: {idt.rejection_flags}"
+    assert idt.estimated_cost_usd is not None
+    assert idt.estimated_cost_usd > 0
+
+
+def test_synthesis_insulin_b_twist_short():
+    from aixbio.tools.synthesis_feasibility import get_synthesis_quotes
+    cassette = _make_insulin_b_cassette()
+    q = get_synthesis_quotes("Insulin_B", cassette)
+    twist = next(vq for vq in q.quotes if vq.vendor == "Twist")
+    # Insert + flanks is ~210 bp — below Twist 300 bp minimum
+    if q.sequence_length < 300:
+        assert not twist.feasible
+        assert any("too short" in f.lower() for f in twist.rejection_flags)
+    else:
+        assert twist.feasible
+
+
+def test_synthesis_bad_gc_flagged():
+    from aixbio.tools.synthesis_feasibility import get_synthesis_quotes
+    # Very low GC sequence
+    low_gc_cassette = "ATATATAT" * 30   # ~0% GC
+    q = get_synthesis_quotes("low_gc_test", low_gc_cassette)
+    for vq in q.quotes:
+        if not vq.feasible:
+            assert any("GC" in f for f in vq.rejection_flags)
+
+
+def test_synthesis_homopolymer_flagged():
+    from aixbio.tools.synthesis_feasibility import get_synthesis_quotes
+    # Embed a 12-bp poly-A run into a valid GC sequence
+    base = "ATGCGTAAAGGT" * 5  # normal GC
+    bad_insert = base + "AAAAAAAAAAAA" + base  # 12-bp poly-A
+    q = get_synthesis_quotes("homopolymer_test", bad_insert)
+    assert q.longest_homopolymer >= 12
+    idt = next(vq for vq in q.quotes if vq.vendor == "IDT")
+    assert not idt.feasible
+    assert any("homopolymer" in f.lower() or "A/T" in f for f in idt.rejection_flags)
+
+
+def test_synthesis_format_report():
+    from aixbio.tools.synthesis_feasibility import format_quotes_text, get_synthesis_quotes
+    cassette = _make_insulin_b_cassette()
+    q = get_synthesis_quotes("Insulin_B", cassette)
+    report = format_quotes_text([q])
+    assert "Insulin_B" in report
+    assert "IDT" in report
+    assert "Twist" in report
+    assert "bp" in report

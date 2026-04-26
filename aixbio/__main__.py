@@ -165,6 +165,22 @@ def _print_results(result: dict):
     if protocol:
         print(f"\nProtocol generated ({len(protocol)} chars) — written to output/protocol.md")
 
+    # Synthesis feasibility (always computed if chain results are available)
+    chain_results = result.get("chain_results", [])
+    if chain_results:
+        from aixbio.tools.synthesis_feasibility import get_synthesis_quotes
+        print(f"\nSynthesis Feasibility:")
+        for cr in chain_results:
+            if not cr.get("cassette_dna"):
+                continue
+            q = get_synthesis_quotes(cr["chain_id"], cr["cassette_dna"])
+            for vq in q.quotes:
+                status = "FEASIBLE" if vq.feasible else "FLAGGED"
+                cost = f"~${vq.estimated_cost_usd:.0f}" if vq.estimated_cost_usd else "N/A"
+                print(f"  {cr['chain_id']} / {vq.vendor}: [{status}] {cost}")
+                for flag in vq.rejection_flags:
+                    print(f"    ! {flag}")
+
     decisions = result.get("decision_log", [])
     if decisions:
         print(f"\nAgent Decisions ({len(decisions)}):")
@@ -252,6 +268,42 @@ def _write_artifacts(result: dict, compound_id: str, output_dir: str):
         protocol_path = out / "protocol.md"
         protocol_path.write_text(protocol)
         print(f"  Wrote {protocol_path}")
+
+    # Synthesis feasibility report
+    synthesis_quotes = []
+    for cr in chain_results:
+        if cr.get("cassette_dna"):
+            from aixbio.tools.synthesis_feasibility import format_quotes_text, get_synthesis_quotes
+            q = get_synthesis_quotes(cr["chain_id"], cr["cassette_dna"])
+            synthesis_quotes.append(q)
+
+    if synthesis_quotes:
+        from aixbio.tools.synthesis_feasibility import format_quotes_text
+        report_path = out / "synthesis_report.txt"
+        report_path.write_text(format_quotes_text(synthesis_quotes))
+        print(f"  Wrote {report_path}")
+
+        # Embed compact summary in JSON
+        summary["synthesis_quotes"] = [
+            {
+                "chain_id": q.chain_id,
+                "insert_length": q.sequence_length,
+                "gc_content": q.gc_content,
+                "longest_homopolymer": q.longest_homopolymer,
+                "vendors": [
+                    {
+                        "vendor": vq.vendor,
+                        "feasible": vq.feasible,
+                        "estimated_cost_usd": vq.estimated_cost_usd,
+                        "estimated_turnaround": vq.estimated_turnaround,
+                        "rejection_flags": list(vq.rejection_flags),
+                        "notes": list(vq.notes),
+                    }
+                    for vq in q.quotes
+                ],
+            }
+            for q in synthesis_quotes
+        ]
 
     # LC-MS/MS peptide mass tables (one TSV per chain, always written)
     protein_record = result.get("protein_record")

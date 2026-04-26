@@ -328,10 +328,40 @@ All artifacts written to output/
 | `Insulin_B_chain_plasmid.gb` | Same for B-chain |
 | `Insulin_A_chain_peptides.tsv` | Tryptic peptide masses for A-chain (LC-MS/MS QC reference) |
 | `Insulin_B_chain_peptides.tsv` | Tryptic peptide masses for B-chain |
-| `P01308_summary.json` | Machine-readable summary: validation checks, solubility scores, host recommendation |
+| `synthesis_report.txt` | IDT and Twist synthesis feasibility + price estimates for every chain |
+| `P01308_summary.json` | Machine-readable summary: validation checks, solubility scores, host recommendation, synthesis quotes |
 | `protocol.md` | Full bench SOP with literature citations (only with `--protocol`) |
 
-### 5. Peptide mass table (B-chain excerpt)
+### 5. Synthesis feasibility (IDT + Twist)
+
+Before the bench team orders a gene fragment, the pipeline automatically screens every cassette against the published complexity rules and 2024 list prices for two vendors:
+
+| Vendor | Min length | Max length | GC window | Homopolymer limit | Price (insulin B) |
+|--------|-----------|-----------|-----------|-------------------|--------------------|
+| IDT gBlocks | 125 bp | 3 000 bp | 25–65% | A/T ≤ 9 bp · G/C ≤ 7 bp | ~$95 |
+| Twist Gene Fragments | 300 bp | 5 000 bp | 25–65% | any base ≤ 9 bp | flagged (too short) |
+
+For insulin (chains ~171–198 bp with BamHI/XhoI flanks):
+
+```
+Synthesis Feasibility Report
+============================================
+
+Chain: Insulin_B_chain
+  Insert length : 216 bp
+  GC content    : 52.3%
+  Max homopolymer: 8 bp
+
+  IDT     [FEASIBLE]  ~$95  10–15 business days
+           ℹ Expedited synthesis available (3–5 business days, additional cost).
+  Twist   [FLAGGED]   N/A   N/A
+           ✗ Sequence too short (216 bp); Twist minimum is 300 bp.
+             Use IDT gBlocks (min 125 bp) or oligo assembly for short inserts.
+```
+
+The `synthesis_report.txt` is written to `output/` automatically; no extra flags needed.
+
+### 7. Peptide mass table (B-chain excerpt)
 
 ```
 chain_id        peptide                   start  end  length  mono_mass    mz_2+      mz_3+
@@ -342,7 +372,7 @@ Insulin_B_chain T                         30     30   1       119.0582     60.53
 
 This table lets a mass spectrometrist verify protein identity after tryptic digest without running the full experiment first.
 
-### 6. Generated SOP excerpt (`protocol.md`)
+### 8. Generated SOP excerpt (`protocol.md`)
 
 ```markdown
 # Protocol: Insulin Expression and Purification in E. coli
@@ -381,7 +411,7 @@ f. Monitor refolding by RP-HPLC or native PAGE.
 ...
 ```
 
-### 7. What happens without `--protocol`
+### 9. What happens without `--protocol`
 
 The pipeline still produces validated GenBank files, FASTA sequences, a peptide mass table, and the
 JSON summary — all with zero LLM calls beyond the initial UniProt fetch. Add `--protocol` only when
