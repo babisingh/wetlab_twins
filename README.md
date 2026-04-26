@@ -47,6 +47,92 @@ Main graph
 └── protocol_generation         (optional) PubMed fetch + LLM → literature-backed wet-lab SOP
 ```
 
+```mermaid
+flowchart TD
+    INPUT(["🧬 UniProt accession\ne.g. P01308"])
+
+    INPUT --> PRE
+
+    PRE{"🛡️ Biosafety pre-flight\nLayer 1 — UniProt ID blocklist"}
+    PRE -- "❌ Select Agent match" --> BLK1[/"🚫 HALTED\nno artifacts written"/]
+    PRE -- "✅ Clear" --> SEQ
+
+    SEQ["🔍 Sequence retrieval\nUniProt REST · mature chain extraction"]
+    SEQ --> BIO
+
+    BIO{"🛡️ Biosafety screen\nLayer 2 — name keywords\nLayer 3 — AA signatures"}
+    BIO -- "❌ Blocked" --> BLK2[/"🚫 HALTED\nno artifacts written"/]
+    BIO -- "✅ Clear" --> HOST
+
+    HOST["🧫 Host selection\nN-glyco · Cys count · GRAVY · length\n→ E. coli / CHO / P. pastoris / Sf9"]
+    HOST --> HC1
+
+    HC1{{"👤 Human checkpoint\nreview chains + host"}}
+    HC1 -- reject --> BLK3[/"🛑 Halted by user"/]
+    HC1 -- approve --> FAN
+
+    FAN(["↔ Fan-out\none branch per chain"])
+
+    subgraph SUB["Per-chain subgraph  (parallel for each chain)"]
+        direction TB
+        SOL["💧 Solubility prediction\nGRAVY · instability index · pI · Cys\n→ score 0–1 + disulfide risk flag"]
+        COD["⚙️ Codon optimisation\nbest E. coli codon per amino acid"]
+        CAS["🧱 Cassette assembly\nATG · 6×His · EK site · gene · TAATAA"]
+        PLA["🔬 Plasmid assembly\npET-28a(+) · BamHI/XhoI insert"]
+        VAL["✔️ Sequence validation\nGC · CAI · restriction sites\nRNA ΔG · back-translation · rare codons · repeats"]
+        REM["🔧 Remediation\nsynonymous codon swaps · retry"]
+        ESC["🤖 LLM escalation agent\napply_plan · change_strategy\nincompatible · give_up"]
+        CPASS(["✅ Chain passed"])
+        CFAIL(["❌ Chain failed"])
+
+        SOL --> COD --> CAS --> PLA --> VAL
+        VAL -- "pass" --> CPASS
+        VAL -- "fail · retries left" --> REM --> VAL
+        VAL -- "fail · retries exhausted" --> ESC
+        ESC -- "apply_plan" --> REM
+        ESC -- "change_strategy" --> COD
+        ESC -- "incompatible / give_up" --> CFAIL
+    end
+
+    FAN --> SOL
+    CPASS --> MRG
+    CFAIL --> MRG
+
+    MRG["⟨⟩ Merge results\naggregate validation + solubility + synthesis quotes"]
+    MRG --> HC2
+
+    HC2{{"👤 Human checkpoint\nreview assembled plasmids"}}
+    HC2 -- reject --> BLK4[/"🛑 Halted by user"/]
+    HC2 -- approve --> STRUC
+
+    STRUC{"--structural flag?"}
+    STRUC -- yes --> ALP["🏗️ Structural validation\nESMFold/AlphaFold · pLDDT · RMSD"]
+    STRUC -- no --> PROTO
+    ALP --> PROTO
+
+    PROTO{"--protocol flag?"}
+    PROTO -- yes --> SOP["📚 Protocol generation\nPubMed search + LLM\nliterature-backed wet-lab SOP"]
+    PROTO -- no --> OUT
+    SOP --> OUT
+
+    OUT[/"📦 Output artifacts\n*.fasta  ·  *_plasmid.gb  ·  *_peptides.tsv\nsynthesis_report.txt  ·  *_summary.json\nprotocol.md"/]
+
+    classDef llm        fill:#f4a261,stroke:#e76f51,color:#1a1a2e
+    classDef det        fill:#457b9d,stroke:#1d3557,color:#f1faee
+    classDef block      fill:#e63946,stroke:#c1121f,color:#f1faee
+    classDef gate       fill:#2d6a4f,stroke:#1b4332,color:#d8f3dc
+    classDef human      fill:#9b72cf,stroke:#6a3d9a,color:#fff
+    classDef io         fill:#264653,stroke:#023047,color:#e9c46a
+    classDef merge      fill:#0077b6,stroke:#023e8a,color:#caf0f8
+
+    class SEQ,HOST,SOL,COD,CAS,PLA,VAL,REM,ALP,MRG det
+    class ESC,SOP llm
+    class BLK1,BLK2,BLK3,BLK4,CFAIL block
+    class PRE,BIO,STRUC,PROTO gate
+    class HC1,HC2 human
+    class INPUT,CPASS,FAN,OUT io
+```
+
 ## Modularity
 
 The codebase is split into six focused layers — each independently importable and testable:
@@ -150,6 +236,54 @@ Every decision is recorded in the shared state:
 - `decision_log` — structured `AgentDecision` records from every LLM node
 - `remediation_history` — every `RemediationAction` applied (before/after codons, positions, reasoning)
 - `warnings` — non-fatal issues surfaced during processing
+
+## Biosafety screening
+
+The pipeline refuses to process sequences that match any entry on the
+CDC/USDA Select Agent Program toxin list. Screening runs in **three layers**,
+in order:
+
+| Layer | When | What is checked |
+|-------|------|----------------|
+| 1 — UniProt ID blocklist | Pre-flight (before any network call) | Exact match against a curated set of 30+ canonical accessions for Tier-1 toxins |
+| 2 — Protein name keywords | After UniProt retrieval | Case-insensitive substring match on the protein name / description |
+| 3 — AA signature scan | After UniProt retrieval | Short diagnostic peptides from published immunoassay literature embedded in the chain sequence |
+
+If any layer matches, the pipeline **halts immediately**, prints a block
+notice, and writes **no output artifacts**:
+
+```
+============================================================
+BIOSAFETY BLOCK — PIPELINE HALTED
+============================================================
+Compound : P02879
+Agent    : Ricin (Ricinus communis)
+Reason   : UniProt accession P02879 is a CDC/USDA Select Agent toxin
+           (Ricin (Ricinus communis)). Synthesis of this sequence is
+           prohibited without an approved Select Agent registration.
+
+This sequence is a CDC/USDA Select Agent toxin. Synthesis is
+prohibited without an approved Select Agent registration.
+See: https://www.selectagents.gov/
+```
+
+Blocked agents include (non-exhaustive): ricin, abrin, all botulinum toxin
+serotypes (A–G), tetanus toxin, anthrax toxin components, diphtheria toxin,
+Shiga toxins, cholera toxin, staphylococcal enterotoxins A–E, *C. perfringens*
+epsilon toxin, pertussis toxin, Ebola/Marburg glycoproteins, and *Y. pestis*
+F1 antigen.
+
+> **For production deployments** supplement this heuristic screen with a
+> BLAST search against the NCBI Select Agent sequence database
+> (https://www.ncbi.nlm.nih.gov/selectagent/). The heuristic covers all
+> canonical accessions but cannot catch novel variants or fragments that fall
+> below keyword/signature detection thresholds.
+
+**Files involved:**
+- `aixbio/tools/biosafety.py` — blocklists + `screen_compound_id()` / `screen_protein()`
+- `aixbio/models/biosafety.py` — `BiosafetyResult` dataclass
+- `aixbio/nodes/biosafety_screen.py` — LangGraph node (runs after `sequence_retrieval`, before `host_selection`)
+- `tests/test_biosafety.py` — 19 unit + integration tests
 
 ## Configuration
 
