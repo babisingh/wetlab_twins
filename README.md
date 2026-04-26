@@ -19,7 +19,7 @@ echo "OPENROUTER_API_KEY=sk-..." > .env
 uv run aixbio P01308                   # interactive (human review prompts)
 uv run aixbio P01308 --auto-approve    # fully automated
 uv run aixbio P01308 --escalation      # enable LLM fallback on hard failures
-uv run aixbio P01308 --structural      # add AlphaFold structure check (stubbed)
+uv run aixbio P01308 --structural      # add ESMFold/AlphaFold structure check
 ```
 
 ## Pipeline overview
@@ -28,19 +28,19 @@ The pipeline is a two-level LangGraph `StateGraph`. Each level is independently 
 
 ```
 Main graph
-├── sequence_retrieval          (LLM) fetch & parse UniProt, extract chains
+├── sequence_retrieval          fetch & parse UniProt, extract mature chains (deterministic)
 ├── human_checkpoint_chains     review extracted chains before processing
 ├── chain_processing × N        fan-out: one subgraph run per protein chain
 │   └── Chain subgraph
 │       ├── codon_optimization  greedy best-codon assignment + restriction avoidance
 │       ├── cassette_assembly   ATG + 6×His tag + protease site + gene + stop
 │       ├── plasmid_assembly    insert cassette into pET-28a(+) vector
-│       ├── sequence_validation 6 independent checks (see below)
+│       ├── sequence_validation 7 independent checks (see below)
 │       └── remediation loop   synonymous swaps → revalidate (up to 3 attempts)
 │           └── escalation_agent (LLM, optional) fires once if loop exhausted
 ├── merge_results               collect all chain outcomes
 ├── human_checkpoint_plasmid    review assembled plasmids
-└── structural_validation       (optional) AlphaFold confidence check
+└── structural_validation       (optional) ESMFold/AlphaFold confidence check
 ```
 
 ## Modularity
@@ -56,13 +56,13 @@ The codebase is split into six focused layers — each independently importable 
 | **graph** | `aixbio/graph/` | Graph wiring only — no business logic. |
 | **prompts** | `aixbio/prompts/` | LLM prompt templates decoupled from node logic. |
 
-Deterministic nodes (steps 2–5, remediation) are fully testable without any LLM or network call. Only `sequence_retrieval` and the optional `escalation_agent` touch the LLM.
+Deterministic nodes (steps 2–5, remediation) are fully testable without any LLM or network call. Only the optional `escalation_agent` touches the LLM; `sequence_retrieval` is deterministic (UniProt REST + feature parsing).
 
 ## Validation & verification
 
 ### Automated sequence checks (`sequence_validation`)
 
-Every chain is evaluated against six independent criteria before the result is accepted:
+Every chain is evaluated against seven independent criteria before the result is accepted:
 
 | Check | Threshold | Scope |
 |---|---|---|
@@ -72,6 +72,7 @@ Every chain is evaluated against six independent criteria before the result is a
 | **5' RNA secondary structure** | ΔG > −10 kcal/mol | First ~50 nt of construct (ViennaRNA) |
 | **Back-translation identity** | 100% match | Gene back-translated vs original amino acid sequence |
 | **Rare codons** | 0 | Coding gene |
+| **Direct repeats** | 0 repeats ≥ 20 bp | Full construct (RecA-independent deletion risk) |
 
 All checks are defined as typed `CheckResult` dataclasses and collected into a `ChainValidation` record that travels with the chain through the rest of the pipeline.
 
@@ -84,7 +85,7 @@ When validation fails, the pipeline does not give up — it plans targeted synon
 - **CAI score** — upgrade suboptimal codons sorted by relative frequency (worst first)
 - **GC content** — shift GC up or down codon-by-codon until in range
 
-After each round of fixes the cassette and plasmid are fully reassembled and all six checks are re-run.
+After each round of fixes the cassette and plasmid are fully reassembled and all seven checks are re-run.
 
 ### LLM escalation agent (opt-in)
 
