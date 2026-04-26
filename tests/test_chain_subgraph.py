@@ -23,6 +23,7 @@ def _make_input_state():
         "vector": "pET-28a(+)",
         "cloning_sites": ("BamHI", "XhoI"),
         "protein_record": PROTEIN,
+        "solubility_result": None,
         "optimized_dna": None,
         "cassette": None,
         "plasmid": None,
@@ -64,3 +65,14 @@ def test_chain_subgraph_completes():
     cr = result["chain_results"][0]
     assert cr["chain_id"] == "Insulin_B"
     assert cr["validation_passed"] == validation.passed
+
+    # Solubility prediction must run and carry through to the packaged result
+    assert result["solubility_result"] is not None
+    sol = result["solubility_result"]
+    assert sol.id == "Insulin_B"
+    assert 0.0 <= sol.score <= 1.0
+    assert sol.cysteine_count == 2   # insulin B has 2 Cys
+    assert sol.disulfide_risk is True
+
+    assert cr["solubility_score"] == sol.score
+    assert cr["disulfide_risk"] is True

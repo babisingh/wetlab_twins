@@ -64,6 +64,7 @@ def fan_out_to_chains(state: PipelineState) -> list[Send]:
             "vector": state["vector"],
             "cloning_sites": state["cloning_sites"],
             "protein_record": protein,
+            "solubility_result": None,
             "optimized_dna": None,
             "cassette": None,
             "plasmid": None,
@@ -85,7 +86,17 @@ def fan_out_to_chains(state: PipelineState) -> list[Send]:
 
 def structural_router(
     state: PipelineState,
-) -> Literal["structural_validation", "__end__"]:
+) -> Literal["structural_validation", "protocol_generation", "__end__"]:
     if state.get("run_structural_validation"):
         return "structural_validation"
+    if state.get("run_protocol_generation"):
+        return "protocol_generation"
+    return "__end__"
+
+
+def post_structural_router(
+    state: PipelineState,
+) -> Literal["protocol_generation", "__end__"]:
+    if state.get("run_protocol_generation"):
+        return "protocol_generation"
     return "__end__"

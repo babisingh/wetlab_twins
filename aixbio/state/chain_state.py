@@ -8,6 +8,7 @@ from aixbio.models.escalation import EscalationDecision
 from aixbio.models.plasmid import PlasmidChain
 from aixbio.models.protein import Chain, ProteinRecord
 from aixbio.models.remediation import RemediationAction, RemediationPlan
+from aixbio.models.solubility import SolubilityResult
 from aixbio.models.validation import ChainValidation, CheckResult
 from aixbio.state.pipeline_state import ChainProcessingResult, append_log
 
@@ -22,6 +23,9 @@ class ChainSubgraphState(TypedDict):
     vector: str
     cloning_sites: tuple[str, ...]
     protein_record: ProteinRecord
+
+    # Step 1 of chain subgraph: solubility / inclusion-body prediction
+    solubility_result: SolubilityResult | None
 
     # Per-chain outputs (built up through the subgraph)
     optimized_dna: DNAChain | None

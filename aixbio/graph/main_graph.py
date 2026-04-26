@@ -10,7 +10,8 @@ from aixbio.nodes.human_checkpoints import (
     human_checkpoint_plasmid,
 )
 from aixbio.nodes.merge_results import merge_all_chain_results
-from aixbio.nodes.routers import fan_out_to_chains, structural_router
+from aixbio.nodes.protocol_generation import protocol_generation
+from aixbio.nodes.routers import fan_out_to_chains, post_structural_router, structural_router
 from aixbio.nodes.sequence_retrieval import sequence_retrieval_agent
 from aixbio.nodes.structural_validation import structural_validation
 from aixbio.state.pipeline_state import PipelineState
@@ -37,6 +38,9 @@ def build_main_graph() -> StateGraph:
     # Step 6: Structural Validation (optional)
     g.add_node("structural_validation", structural_validation)
 
+    # Step 7: Protocol / SOP generation (optional, requires --protocol flag)
+    g.add_node("protocol_generation", protocol_generation)
+
     # Edges
     g.add_edge(START, "sequence_retrieval")
     g.add_edge("sequence_retrieval", "human_checkpoint_chains")
@@ -52,22 +56,34 @@ def build_main_graph() -> StateGraph:
     g.add_edge("chain_processing", "merge_results")
     g.add_edge("merge_results", "human_checkpoint_plasmid")
 
-    # Conditional: run structural validation or finish
+    # After plasmid review: optionally run structural validation and/or protocol generation
     g.add_conditional_edges(
         "human_checkpoint_plasmid",
         structural_router,
         {
             "structural_validation": "structural_validation",
+            "protocol_generation": "protocol_generation",
             "__end__": END,
         },
     )
 
-    g.add_edge("structural_validation", END)
+    # After structural validation: optionally run protocol generation
+    g.add_conditional_edges(
+        "structural_validation",
+        post_structural_router,
+        {
+            "protocol_generation": "protocol_generation",
+            "__end__": END,
+        },
+    )
+
+    g.add_edge("protocol_generation", END)
 
     return g
 
 
 _ALLOWED_MSGPACK_MODULES = [
+    ("aixbio.models.solubility", "SolubilityResult"),
     ("aixbio.models.protein", "Chain"),
     ("aixbio.models.protein", "ProteinRecord"),
     ("aixbio.models.validation", "CheckResult"),

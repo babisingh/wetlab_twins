@@ -8,6 +8,7 @@ from aixbio.state.pipeline_state import ChainProcessingResult, PipelineState
 def package_result(state: ChainSubgraphState) -> dict:
     validation = state["chain_validation"]
     is_passed = validation.passed if validation else False
+    sol = state.get("solubility_result")
     return {
         "chain_results": [ChainProcessingResult(
             chain_id=state["chain"].id,
@@ -19,6 +20,9 @@ def package_result(state: ChainSubgraphState) -> dict:
             checks=validation.checks if validation else (),
             remediation_rounds=state["remediation_attempt"],
             remediation_history=tuple(state.get("remediation_history", [])),
+            solubility_score=sol.score if sol else None,
+            solubility_reasoning=sol.reasoning if sol else "",
+            disulfide_risk=sol.disulfide_risk if sol else False,
             status="passed" if is_passed else "failed",
         )],
     }

@@ -9,6 +9,7 @@ from aixbio.models.structure import StructureReport
 from aixbio.models.validation import ChainValidation, CheckResult, ValidationReport
 
 
+
 def merge_chain_validations(
     existing: tuple[ChainValidation, ...], new: tuple[ChainValidation, ...]
 ) -> tuple[ChainValidation, ...]:
@@ -35,6 +36,10 @@ class ChainProcessingResult(TypedDict):
     checks: tuple[CheckResult, ...]
     remediation_rounds: int
     remediation_history: tuple[RemediationAction, ...]
+    # Solubility / inclusion-body prediction (from chain subgraph step 1)
+    solubility_score: float | None
+    solubility_reasoning: str
+    disulfide_risk: bool
     # Status distinguishes pass, fail, and max-retries-exceeded outcomes
     status: Literal[
         "passed", "failed", "max_retries_exceeded",
@@ -67,6 +72,10 @@ class PipelineState(TypedDict):
 
     # Step 6 output (optional)
     structure_report: StructureReport | None
+
+    # Protocol generation output (optional, requires --protocol flag)
+    run_protocol_generation: bool
+    protocol: str | None
 
     # Control flow
     pipeline_status: Literal[
